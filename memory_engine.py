@@ -165,7 +165,7 @@ def analyze(model):
 
 
 def main():
-    print("LocalAI Optimizer v0.3.0")
+    print("LocalAI Optimizer v0.4.0")
     print("=== LEARNING MEMORY ENGINE ===")
 
     models = api("/api/tags").get("models", [])

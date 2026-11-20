@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0 — Alpha (2026-11-20)
+
+- Added repeated thread and batch benchmarking with rotation of candidate order.
+- Added quick and detailed context comparisons with context-specific preflight.
+- Added selection of compatible local reports, a guarded final validation run and advisory optimization profiles.
+- Added output consistency checks and documented observed single-machine results.
+- The current batch and context defaults are fixed to the original test configuration; automatic cross-stage calibration, quality evaluation and persistent application are not included.
+- Source formatting and version banners were normalized for publication. Published sources have not been independently rerun.
+
+
 ## 0.3.0 — Alpha (2026-11-20)
 
 - Added interactive three-run profiling with the existing adaptive benchmark checks and model-digest verification.

@@ -118,7 +118,7 @@ def create_profile(model, reports):
 
 
 def main():
-    print("LocalAI Optimizer v0.3.0")
+    print("LocalAI Optimizer v0.4.0")
     print("=== ADAPTIVE PROFILER ===")
 
     models = api("/api/tags").get("models", [])

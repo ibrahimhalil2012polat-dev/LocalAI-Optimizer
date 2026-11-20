@@ -2,7 +2,7 @@
 
 An open-source, Windows-first toolkit for inspecting hardware, estimating local LLM memory requirements, and benchmarking Ollama on resource-constrained computers.
 
-**Status: v0.3.0 Alpha — repeated benchmarks and history-based memory estimates.** Automatic configuration optimization is not yet part of this release.
+**Status: v0.4.0 Alpha — staged CPU configuration benchmarking and preliminary optimization profiles.** The optimizer recommends settings; it does not automatically apply them.
 
 ## Features
 
@@ -17,6 +17,9 @@ An open-source, Windows-first toolkit for inspecting hardware, estimating local 
 - Local JSON benchmark reports.
 - Three-run model profiling with mean, median, variability and memory statistics.
 - Read-only historical memory estimates matched by model name, digest, hardware signature and benchmark options.
+
+- Thread, batch and context benchmarking with guarded inference.
+- Combined profile selection from compatible local reports and a final validation run.
 
 ## Requirements
 
@@ -85,6 +88,26 @@ Select a model and explicitly confirm the three-run sequence. Each run invokes t
 
 The engine reads compatible, completed historical measurements and requires at least three unique full-length runs before reporting a learned estimate. It calculates the observed maximum plus a heuristic allowance (the larger of 0.5 GiB or 15% of that maximum). The displayed effective estimate is the maximum of the theoretical and historical estimates. This is a read-only advisory report, not a replacement for benchmark preflight, and never relaxes the existing safety policy. No matching history means the theoretical estimate is used.
 
+### Experimental CPU optimization workflow
+
+Run the following scripts in order, selecting the same installed model each time:
+
+```powershell
+.\.venv\Scripts\python.exe optimizer.py
+.\.venv\Scripts\python.exe batch_optimizer.py
+.\.venv\Scripts\python.exe context_optimizer.py
+.\.venv\Scripts\python.exe combined_optimizer.py
+```
+
+1. Thread search tests the default, half the physical core count, the physical core count and the logical core count (deduplicated).
+2. Batch search measures prompt processing with batch sizes 64, 128, 256 and 512. The current prototype uses eight threads.
+3. Context search tests 1024, 2048, 4096 and 8192 tokens using eight threads and batch 256. Quick mode uses one run per candidate; detailed mode uses three. Configurations that fail the memory check are skipped.
+4. The combined optimizer selects the fastest observed median thread setting and the lowest observed RAM increase among batches within 1% of the fastest prompt throughput. The user selects a tested context. A new guarded test validates the selected configuration before an advisory profile is saved locally to `profiles/`.
+
+**Current constraint:** the batch and context scripts use fixed settings from the original test machine. If the selected thread or batch differs, the combined optimizer will reject incompatible reports. The staged workflow is not yet a general automatic search for arbitrary hardware. A default-thread winner or a partial context comparison is not supported by the combined selector. Reports are matched by name, digest and applicable options, not a complete hardware/runtime fingerprint.
+
+The scripts request CPU-only inference, unload after each call, use fixed prompts and compare output hashes. Larger batch reserve estimates are heuristic. Output hashes are a consistency check, not a quality test. All recommendations are preliminary; no persistent model settings are modified.
+
 ## Initial manual validation
 
 A Windows test system with approximately 15.74 GiB RAM and Ollama 0.40.15 reported one successful Qwen2.5-Coder 7B benchmark:
@@ -121,6 +144,43 @@ Three successful Qwen2.5-Coder 7B runs on the same Windows system, with identica
 
 The memory engine found all three matching measurements and retained the more conservative 5.471 GiB effective estimate. These are preliminary, single-machine observations and not evidence of a general speedup or exact model-only memory usage.
 
+### v0.4.0 manual optimization observations
+
+On the same Windows test machine, Qwen2.5-Coder 7B showed the following median generation throughput and maximum sampled decrease in available system RAM over three thread runs per candidate:
+
+| Threads | Generation (tokens/s) | RAM (GiB) |
+| --- | ---: | ---: |
+| Default | 6.703 | 4.930 |
+| 4 | 5.932 | 5.074 |
+| 8 | 7.194 | 4.753 |
+| 12 | 6.756 | 4.663 |
+
+Eight threads were 7.33% faster than the default in this specific comparison. All compared default and winning-thread output hashes matched.
+
+Batch search (three runs each, eight threads):
+
+| Batch | Median prompt tokens/s | Median generation tokens/s | RAM (GiB) |
+| --- | ---: | ---: | ---: |
+| 64 | 26.625 | 6.973 | 4.791 |
+| 128 | 26.903 | 7.071 | 5.186 |
+| 256 | 27.317 | 6.992 | 4.654 |
+| 512 | 27.381 | 7.071 | 4.807 |
+
+Batch 512 was 1.78% faster than batch 128 for prompt processing. Batch 256 was selected as a balanced candidate; its tiny throughput difference from 512 may be measurement noise.
+
+Context quick comparison (one run per context, eight threads, batch 256):
+
+| Context | Prompt tokens/s | Generation tokens/s | RAM (GiB) |
+| --- | ---: | ---: | ---: |
+| 1024 | 30.518 | 7.592 | 4.428 |
+| 2048 | 30.957 | 7.582 | 4.539 |
+| 4096 | 30.636 | 7.475 | 4.556 |
+| 8192 | 30.442 | 7.558 | 4.663 |
+
+An earlier context run skipped three candidates due to insufficient estimated RAM. The subsequent complete comparison was conducted with more available RAM. This short-prompt benchmark does not establish full context capacity or long-input quality.
+
+Combined validation: eight threads, batch 256, context 8192; prompt throughput 28.864 tokens/s, generation throughput 6.738 tokens/s, observed RAM increase 5.021 GiB, and minimum available system RAM 3.347 GiB. The validation output hash matched the corresponding context benchmark and the profile was marked PRELIMINARY_VALIDATED. A general combined speedup was not established; the validation used a different workload from the thread benchmark.
+
 ## Limitations and responsible use
 
 - Alpha software. Memory estimates are approximate; eligibility does not guarantee that inference will fit or avoid system instability.
@@ -132,7 +192,8 @@ The memory engine found all three matching measurements and retained the more co
 - Cancellation closes the client connection on a best-effort basis. Instant server-side cancellation and model unloading are not guaranteed. The critical-pressure cancellation path has not yet been validated on real hardware; do not deliberately exhaust memory to test it.
 - Three-run profiles do not eliminate background load, thermal effects, OS file caching or other sources of variation. The model is unloaded between rounds, but OS caches are not cleared.
 - Historical profiles do not yet capture Ollama version or a complete hardware/runtime fingerprint. Historical estimates are heuristic and advisory; they have no authority to override benchmark preflight.
-- Quality evaluation, GPU offloading analysis and automatic setting selection remain planned. No speedup is guaranteed.
+- Full quality evaluation, GPU offloading analysis, dynamic cross-stage calibration, and automatic application remain planned. No speedup is guaranteed.
+- The older benchmark and experimental optimization scripts duplicate safety logic. A shared tested monitor and stronger preflight checks remain future work. Cancellation is best effort. Prompt cache detection depends on API metadata availability.
 
 ## Development
 

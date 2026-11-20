@@ -22,6 +22,17 @@
 - [x] Read-only history-based memory estimate with conservative allowance
 - [x] Preliminary validation on one Windows system
 
+## v0.4.0 — Experimental staged optimizer
+
+- [x] Thread and batch comparisons (three runs per candidate)
+- [x] Quick and detailed context comparison modes
+- [x] Historical report selection and final validation
+- [x] Local advisory optimization profiles
+- [x] Initial manual workflow validation on one Windows system
+- [ ] End-to-end default-versus-selected comparison on identical workloads
+- [ ] Dynamic thread and batch propagation across calibration stages
+- [ ] Support partial candidate sets, full hardware/runtime matching and default-thread winners
+
 ## Next — Reliable optimization
 
 - [ ] Use a single shared memory policy across compatibility and benchmarking
@@ -32,7 +43,7 @@
 
 ## Later — Optimization and quality
 
-- [ ] Guarded thread, context, batch and GPU offload comparisons
+- [ ] Extend guarded CPU comparisons to GPU offload
 - [ ] Reproducible output quality tests
 - [ ] Recommend configurations based on speed, quality and memory trade-offs
 - [ ] Evaluate quantization and KV-cache types
