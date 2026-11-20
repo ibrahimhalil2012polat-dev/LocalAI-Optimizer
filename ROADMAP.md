@@ -15,11 +15,18 @@
 - [x] Token throughput, latency and local JSON benchmark reports
 - [ ] Mocked automated tests and validation of cancellation behavior
 
-## Next — Reliable measurement
+## v0.3.0 — Repeated benchmarks and historical memory profiles
+
+- [x] Three-run benchmark sequence using the existing safety preflight
+- [x] Throughput statistics, variability and local model profiles
+- [x] Read-only history-based memory estimate with conservative allowance
+- [x] Preliminary validation on one Windows system
+
+## Next — Reliable optimization
 
 - [ ] Use a single shared memory policy across compatibility and benchmarking
-- [ ] Repeat tests under comparable conditions and report variance
-- [ ] Learn per-model, per-hardware memory profiles from observed measurements
+- [ ] Record Ollama version and more complete runtime fingerprints
+- [ ] Validate memory estimates on additional hardware and workloads
 - [ ] Separate paging from aggregate disk activity
 - [ ] Improve commit requirement estimation and server-side cancellation verification
 

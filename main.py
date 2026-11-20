@@ -67,6 +67,6 @@ def scan_models():
 
 
 if __name__ == "__main__":
-    print("LocalAI Optimizer v0.2.0")
+    print("LocalAI Optimizer v0.3.0")
     scan_hardware()
     scan_models()

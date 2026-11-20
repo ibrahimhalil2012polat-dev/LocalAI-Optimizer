@@ -224,3 +224,6 @@ __marimo__/
 
 # Local benchmark reports (not shared automatically)
 /results/
+
+# Local model profiles (not shared automatically)
+/profiles/

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0 — Alpha (2026-11-20)
+
+- Added interactive three-run profiling with the existing adaptive benchmark checks and model-digest verification.
+- Added local profile statistics and history-based advisory memory estimation with conservative fallback.
+- Documented preliminary three-run validation and limitations.
+- Excluded local profiles from version control.
+- Historical estimates do not override benchmark safety; automatic configuration optimization remains unreleased.
+
 ## 0.2.0 — Alpha (2026-11-20)
 
 - Added CPU/GPU name detection.

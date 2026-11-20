@@ -120,7 +120,7 @@ def assess_model(model, running):
 
 
 def main():
-    print("LocalAI Optimizer v0.2.0")
+    print("LocalAI Optimizer v0.3.0")
     print("=== ADVANCED COMPATIBILITY ENGINE ===")
     ram = psutil.virtual_memory()
     print("Total RAM:", gib(ram.total), "GiB")
