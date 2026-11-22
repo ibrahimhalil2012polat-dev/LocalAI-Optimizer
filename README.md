@@ -2,7 +2,7 @@
 
 An open-source, Windows-first toolkit for inspecting hardware, estimating local LLM memory requirements, and benchmarking Ollama on resource-constrained computers.
 
-**Status: v0.4.0 Alpha — staged CPU configuration benchmarking and preliminary optimization profiles.** The optimizer recommends settings; it does not automatically apply them.
+**Status: v0.5.0 Alpha — experimental output and code-quality checks added to preliminary CPU optimization profiles.** The toolkit does not apply settings automatically; failed or inconclusive quality checks must not be treated as approval.
 
 ## Features
 
@@ -108,6 +108,48 @@ Run the following scripts in order, selecting the same installed model each time
 
 The scripts request CPU-only inference, unload after each call, use fixed prompts and compare output hashes. Larger batch reserve estimates are heuristic. Output hashes are a consistency check, not a quality test. All recommendations are preliminary; no persistent model settings are modified.
 
+
+## Experimental code-quality workflow (v0.5.0)
+
+This optional workflow compares an **experimental fixed baseline** (Ollama default threads, batch 128, context 2048) with a **fixed test configuration** (8 threads, batch 256, context 2048). These values came from one CPU-only test machine; the quality scripts **do not yet load the optimal profile selected by** `combined_optimizer.py`. They are not a universal optimization recommendation. The combined 8192-context configuration has **not** undergone these code-quality checks.
+
+Start Ollama with a downloaded model and run:
+
+```powershell
+.\.venv\Scripts\python.exe quality_engine.py
+.\.venv\Scripts\python.exe code_quality_engine.py
+```
+
+`quality_engine.py` asks six exact-output programming questions. `code_quality_engine.py` generates two Python functions and two Unity C# scripts with both configurations, using CPU-only inference and preflight memory checks. Select detailed mode for all four generation tasks. Inference can consume significant RAM; cancellation is best effort.
+
+Next, with a **.NET SDK** installed (`dotnet --version`), analyze the saved code-generation report. Ollama does not need to be running for these local checks:
+
+```powershell
+.\.venv\Scripts\python.exe compilation_validator.py
+.\.venv\Scripts\python.exe behavior_validator.py
+.\.venv\Scripts\python.exe unity_behavior_validator.py
+.\.venv\Scripts\python.exe quality_summary.py
+```
+
+The compilation validator uses Python `compile(..., "exec")` for syntax checking **without executing the generated Python code**, and builds generated C# as a .NET class library against limited UnityEngine stubs. This is **not actual Unity compilation or a runtime test**. The Python behavior validator interprets a restricted subset of AST nodes against fixed test inputs instead of running generated code. The Unity behavior validator recognizes a few source-code patterns and can flag the specific error of assigning absolute 90-degree door rotation rather than adding 90 degrees to the initial local rotation; unrecognized alternatives receive `INCONCLUSIVE`. These limited checks can produce false positives or negatives.
+
+`quality_summary.py` joins reports from the latest matching code-generation run into JSON and Markdown summaries in ignored `results/`. Its 12 per-task checks cover static structure, compilation and limited behavior; they are **not 12 independent generated programs**. A failed requirement is not cancelled out by finding no regression. `LIMITED_TESTS_PASSED` does not mean general model quality is proven; the summary keeps `automatic_apply_approved=false`. Generated source is retained inside local JSON reports: review and redact before sharing.
+
+Run the included non-inference smoke tests:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+**Manual single-machine observation (Qwen2.5-Coder 7B):** baseline and fixed test configuration both answered 6/6 short output questions, passed 4/4 static checks and 4/4 Python-syntax/C#-stub compilation checks, and passed 14/14 restricted Python behavior cases. Both failed the same Unity door rotation requirement while the flashlight pattern was recognized. The combined quality summary showed **11/12 checks passed for each configuration**, with no newly detected regression, but status `QUALITY_REQUIREMENTS_FAILED`. These observations do not establish a general speedup, equivalent overall quality, or the correctness of code in Unity.
+
+### Remaining quality limitations
+
+- Tests are small and partly pattern-based; generated programs are not run in a sandbox or the Unity Editor.
+- The baseline/optimized quality options are fixed and not propagated from per-user optimizer profiles.
+- Compiling untrusted C# consumes local compiler resources; the controlled project avoids invoking the generated assembly, but this is **not a security sandbox**.
+- No persistent Ollama model settings are changed, and there is no apply/restore workflow yet.
+
 ## Initial manual validation
 
 A Windows test system with approximately 15.74 GiB RAM and Ollama 0.40.15 reported one successful Qwen2.5-Coder 7B benchmark:
@@ -192,7 +234,7 @@ Combined validation: eight threads, batch 256, context 8192; prompt throughput 2
 - Cancellation closes the client connection on a best-effort basis. Instant server-side cancellation and model unloading are not guaranteed. The critical-pressure cancellation path has not yet been validated on real hardware; do not deliberately exhaust memory to test it.
 - Three-run profiles do not eliminate background load, thermal effects, OS file caching or other sources of variation. The model is unloaded between rounds, but OS caches are not cleared.
 - Historical profiles do not yet capture Ollama version or a complete hardware/runtime fingerprint. Historical estimates are heuristic and advisory; they have no authority to override benchmark preflight.
-- Full quality evaluation, GPU offloading analysis, dynamic cross-stage calibration, and automatic application remain planned. No speedup is guaranteed.
+- Broader reproducible quality evaluation, GPU offloading analysis, dynamic cross-stage calibration, and automatic application remain planned. No speedup is guaranteed.
 - The older benchmark and experimental optimization scripts duplicate safety logic. A shared tested monitor and stronger preflight checks remain future work. Cancellation is best effort. Prompt cache detection depends on API metadata availability.
 
 ## Development

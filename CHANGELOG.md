@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0 — Alpha (2026-11-22)
+
+- Added CPU-only exact-output quality checks comparing baseline and fixed test settings.
+- Added Python/Unity C# generation tasks, static checks, C# stub compilation, restricted Python behavior interpretation, and Unity source-pattern analysis.
+- Added quality summary JSON/Markdown reports and six local smoke tests.
+- Manual Qwen2.5-Coder 7B test: 11/12 limited quality checks passed in both configurations; both failed the same Unity door relative-rotation requirement. Status QUALITY_REQUIREMENTS_FAILED; no detected optimization-specific regression.
+- This is **not** full code/Unity runtime validation, an end-to-end speedup guarantee, or authorization for automatic application. Settings are not persisted; published source has not been rerun end-to-end in a clean Windows environment.
+
 ## 0.4.0 — Alpha (2026-11-20)
 
 - Added repeated thread and batch benchmarking with rotation of candidate order.

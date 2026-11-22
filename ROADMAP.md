@@ -33,6 +33,19 @@
 - [ ] Dynamic thread and batch propagation across calibration stages
 - [ ] Support partial candidate sets, full hardware/runtime matching and default-thread winners
 
+## v0.5.0 — Experimental quality verification
+
+- [x] Exact-output code questions with baseline/fixed-configuration comparisons
+- [x] Python and Unity C# code-generation structure checks
+- [x] Python syntax and C# .NET stub compilation checks
+- [x] Restricted Python behavior checks, without running generated code
+- [x] Basic Unity C# behavior-pattern checks and requirement-failure reports
+- [x] Local quality summaries and validator smoke tests
+- [ ] True isolated runtime evaluation of untrusted code
+- [ ] Unity Editor compilation and behavior testing
+- [ ] Profile-driven quality comparisons across different hardware/configurations
+- [ ] Apply/restore settings with an explicit quality gate and opt-in
+
 ## Next — Reliable optimization
 
 - [ ] Use a single shared memory policy across compatibility and benchmarking
