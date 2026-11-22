@@ -44,7 +44,13 @@
 - [ ] True isolated runtime evaluation of untrusted code
 - [ ] Unity Editor compilation and behavior testing
 - [ ] Profile-driven quality comparisons across different hardware/configurations
-- [ ] Apply/restore settings with an explicit quality gate and opt-in
+
+## v0.6.0 — Local profile activation and main menu
+
+- [x] Manual Apply and Restore with a matching quality report and memory preflight
+- [x] Local guarded Ollama chat and visible active profile status
+- [x] Unified menu with individually launched optimization and quality stages
+- [ ] Validate the full workflow from a fresh install on additional Windows systems
 
 ## Next — Reliable optimization
 

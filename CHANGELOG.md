@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.0 — Alpha (unreleased)
+
+- Added manual activation and restore of a local CPU profile for the guarded Ollama chat runner.
+- Apply checks the model digest, hardware, preliminary validation and matching limited quality results. It uses the context size tested for quality and requires explicit acknowledgment of shared failures.
+- Added a main menu for Analyze, Optimize, Quality Check, Apply, Chat, Restore and Status. The optimization and quality stages retain their individual prompts.
+- Earlier Windows smoke test completed Apply → Status → Chat (`OK`) → Restore for `qwen2.5-coder:7b`. Both quality configurations passed 11/12 limited checks, with the same `unity_door/behavior` failure. No automatic quality approval or general speedup was established.
+
 ## 0.5.0 — Alpha (2026-11-22)
 
 - Added CPU-only exact-output quality checks comparing baseline and fixed test settings.

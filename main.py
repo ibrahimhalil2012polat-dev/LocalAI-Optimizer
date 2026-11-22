@@ -1,11 +1,17 @@
+import argparse
 import platform
 import psutil
 import json
+import sys
 import urllib.request
 import subprocess
+from pathlib import Path
+
+import apply_optimization
 
 GB = 1024 ** 3
 OLLAMA_URL = "http://127.0.0.1:11434"
+ROOT = Path(__file__).resolve().parent
 
 
 def powershell(command):
@@ -66,7 +72,97 @@ def scan_models():
         return []
 
 
-if __name__ == "__main__":
-    print("LocalAI Optimizer v0.4.0")
+def analyze():
     scan_hardware()
     scan_models()
+
+
+def run_script(script):
+    # Isolate each legacy tool's globals and keep its interactive prompts.
+    result = subprocess.run([sys.executable, str(ROOT / script)], cwd=ROOT)
+    if result.returncode:
+        print(f"{script} exited with status {result.returncode}.")
+
+
+def choose(title, labels, exit_label):
+    print(f"\n=== {title} ===")
+    for number, label in enumerate(labels, 1):
+        print(f"{number}. {label}")
+    print(f"0. {exit_label}")
+    choice = input("\nSelect: ").strip()
+    if choice == "0":
+        return None
+    if choice in {str(number) for number in range(1, len(labels) + 1)}:
+        return int(choice) - 1
+    raise ValueError("Invalid selection")
+
+
+def tools_menu(title, stages):
+    labels = [label for label, _ in stages]
+    while True:
+        try:
+            choice = choose(title, labels, "Back")
+            if choice is None:
+                return
+            run_script(stages[choice][1])
+        except KeyboardInterrupt:
+            print("\nCancelled")
+        except (OSError, ValueError) as exc:
+            print("ERROR:", exc)
+
+
+def optimize():
+    tools_menu("OPTIMIZE", [
+        ("Compare threads", "optimizer.py"),
+        ("Compare batches", "batch_optimizer.py"),
+        ("Compare context sizes", "context_optimizer.py"),
+        ("Build combined profile", "combined_optimizer.py"),
+    ])
+
+
+def quality_check():
+    tools_menu("QUALITY CHECK", [
+        ("Generate code samples (choose Detailed for all four tasks)", "code_quality_engine.py"),
+        ("Check compilation", "compilation_validator.py"),
+        ("Check Python behavior", "behavior_validator.py"),
+        ("Check Unity source patterns", "unity_behavior_validator.py"),
+        ("Create quality summary", "quality_summary.py"),
+        ("Run optional short answer checks", "quality_engine.py"),
+    ])
+
+
+def main():
+    parser = argparse.ArgumentParser(description="LocalAI Optimizer v0.6.0")
+    parser.add_argument("--analyze", action="store_true", help="Print hardware and model inventory")
+    if parser.parse_args().analyze:
+        analyze()
+        return
+
+    actions = [
+        ("Analyze", analyze),
+        ("Optimize", optimize),
+        ("Quality Check", quality_check),
+        ("Apply Optimization", apply_optimization.apply),
+        ("Chat", apply_optimization.chat),
+        ("Restore Defaults", apply_optimization.restore),
+        ("Status", apply_optimization.status),
+    ]
+    labels = [label for label, _ in actions]
+    while True:
+        try:
+            choice = choose("LocalAI Optimizer v0.6.0", labels, "Exit")
+            if choice is None:
+                return
+            actions[choice][1]()
+        except EOFError:
+            return
+        except KeyboardInterrupt:
+            print("\nCancelled")
+        except RuntimeError as exc:
+            print("BLOCKED:", exc)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            print("ERROR:", exc)
+
+
+if __name__ == "__main__":
+    main()
