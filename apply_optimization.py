@@ -15,12 +15,16 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 import psutil
 
 from benchmark import commit_available, memory_limits
 from context_optimizer import preflight
 from optimizer import wait_until_unloaded
+from smart_optimizer import METHOD as SMART_METHOD, SCHEMA as SMART_SCHEMA
+from smart_optimizer import QUALITY_LIMIT, fingerprint, verify_profile
+from smart_runtime import Session as SmartSession
 
 ROOT = Path(__file__).resolve().parent
 RESULTS = ROOT / "results"
@@ -199,9 +203,57 @@ def read_candidate(path):
 
 def save_active(state):
     PROFILES.mkdir(parents=True, exist_ok=True)
-    temporary = ACTIVE.with_name(ACTIVE.name + ".tmp")
-    temporary.write_text(json.dumps(state, indent=2), encoding="utf-8")
-    os.replace(temporary, ACTIVE)
+    temporary = None
+    try:
+        with NamedTemporaryFile(mode="w", encoding="utf-8", dir=PROFILES,
+                                delete=False) as stream:
+            temporary = Path(stream.name)
+            json.dump(state, stream, indent=2)
+        # Publish the complete state atomically without replacing concurrent Apply.
+        if os.name == "nt":
+            os.rename(temporary, ACTIVE)
+        else:
+            os.link(temporary, ACTIVE)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def smart_evidence(profile):
+    model = profile.get("model")
+    if not isinstance(model, str) or not model:
+        raise RuntimeError("Smart profile is missing its model")
+    session = SmartSession.inspect(model)
+    options = verify_profile(profile, session)
+    signature = fingerprint(json.dumps(profile, sort_keys=True))
+    return session, options, signature
+
+
+def apply_smart(path, profile):
+    session, options, signature = smart_evidence(profile)
+    session.preflight(options)
+    print("\n=== APPLY PREVIEW ===")
+    print("Model:", session.identity["model"])
+    print("Settings to use:", options)
+    print("Quality: all limited comparisons passed")
+    print("Scope: only conversations through LocalAI Optimizer")
+    if input("Type 'APPLY' to activate: ").strip() != "APPLY":
+        print("Cancelled. No settings changed.")
+        return
+    current, verified_options, verified_signature = smart_evidence(load_json(path))
+    if verified_signature != signature or verified_options != options:
+        raise RuntimeError("Smart profile changed after preview")
+    current.preflight(options)
+    save_active({
+        "schema_version": SMART_SCHEMA, "method": SMART_METHOD,
+        "model": current.identity["model"], "model_digest": current.identity["digest"],
+        "options": options, "max_output_tokens": QUALITY_LIMIT,
+        "quality_status": "LIMITED_TESTS_PASSED", "known_shared_failures": [],
+        "source_profile": path.name, "source_fingerprint": signature,
+        "applied_at_utc": datetime.now(timezone.utc).isoformat(),
+        "scope": "localai_optimizer_chat_only", "automatically_approved": False,
+    })
+    print("\nAPPLIED to local chat runner only. Original Ollama model unchanged.")
 
 
 def apply():
@@ -210,7 +262,7 @@ def apply():
         return
     candidates = profile_candidates()
     if not candidates:
-        print("No optimized profile found. Run combined_optimizer.py first.")
+        print("No optimized profile found. Run Smart Auto Optimizer or Build combined profile.")
         return
     print("\n=== AVAILABLE PROFILES ===")
     for i, path in enumerate(candidates, 1):
@@ -223,6 +275,10 @@ def apply():
     if not value.isdigit() or not 1 <= int(value) <= len(candidates):
         return
     path = candidates[int(value) - 1]
+    profile = load_json(path)
+    if profile.get("method") == SMART_METHOD or profile.get("schema_version") == SMART_SCHEMA:
+        apply_smart(path, profile)
+        return
     name, digest, options = read_candidate(path)
     quality_path, summary = compatible_quality(name, digest)
     applied_options, failures, source_name = validate_quality(
@@ -394,27 +450,23 @@ def stream_chat(model_name, messages, options):
     return "".join(output)
 
 
-def chat():
-    if not ACTIVE.exists():
-        print("No active configuration. Choose Apply Optimization first.")
-        return
-    state = load_json(ACTIVE)
-    if state.get("scope") != "localai_optimizer_chat_only":
-        raise RuntimeError("Unsupported profile scope")
+def chat_evidence(state, opts):
     name, digest = state.get("model"), state.get("model_digest")
-    opts = state.get("options", {})
-    if not isinstance(opts, dict) or any(type(opts.get(k)) is not int for k in
-                                        ("num_ctx", "num_batch", "num_thread", "num_gpu")):
-        raise RuntimeError("Corrupt active profile")
-    if not (512 <= opts["num_ctx"] <= 8192 and 1 <= opts["num_batch"] <= 512 and
-            1 <= opts["num_thread"] <= (psutil.cpu_count() or 1) and opts["num_gpu"] == 0):
-        raise RuntimeError("Unsafe profile options")
-    # Check profile still exists and has an unchanged digest, not just a saved state.
-    model = find_model(name, digest)
     candidate_name = state.get("source_profile")
     if not isinstance(candidate_name, str) or Path(candidate_name).name != candidate_name:
         raise RuntimeError("Invalid source profile")
     candidate = PROFILES / candidate_name
+    profile = load_json(candidate)
+    if (state.get("schema_version") == SMART_SCHEMA or profile.get("schema_version") == SMART_SCHEMA
+            or state.get("method") == SMART_METHOD or profile.get("method") == SMART_METHOD):
+        session, checked, signature = smart_evidence(profile)
+        if (state.get("schema_version") != SMART_SCHEMA or state.get("method") != SMART_METHOD
+                or state.get("automatically_approved") is not False
+                or state.get("source_fingerprint") != signature or checked != opts
+                or (session.identity["model"], session.identity["digest"]) != (name, digest)):
+            raise RuntimeError("Active settings no longer match the approved Smart profile")
+        return session
+    find_model(name, digest)
     model_name, profile_digest, candidate_opts = read_candidate(candidate)
     if (model_name, profile_digest) != (name, digest):
         raise RuntimeError("Source profile changed")
@@ -431,6 +483,25 @@ def chat():
                                                   name, digest, candidate_opts)
     if checked_opts != opts or failures != state.get("known_shared_failures"):
         raise RuntimeError("Quality evidence or applied settings changed")
+    return None
+
+
+def chat():
+    if not ACTIVE.exists():
+        print("No active configuration. Choose Apply Optimization first.")
+        return
+    state = load_json(ACTIVE)
+    if state.get("scope") != "localai_optimizer_chat_only":
+        raise RuntimeError("Unsupported profile scope")
+    name = state.get("model")
+    opts = state.get("options", {})
+    if not isinstance(opts, dict) or any(type(opts.get(k)) is not int for k in
+                                        ("num_ctx", "num_batch", "num_thread", "num_gpu")):
+        raise RuntimeError("Corrupt active profile")
+    if not (512 <= opts["num_ctx"] <= 8192 and 1 <= opts["num_batch"] <= 512 and
+            1 <= opts["num_thread"] <= (psutil.cpu_count() or 1) and opts["num_gpu"] == 0):
+        raise RuntimeError("Unsafe profile options")
+    smart_session = chat_evidence(state, opts)
     if state.get("known_shared_failures"):
         print("WARNING: Known quality failures:", state["known_shared_failures"])
     print("\nOptimized local chat:", name)
@@ -455,16 +526,23 @@ def chat():
         char_budget = max(1000, 2 * (opts["num_ctx"] - 512))
         while sum(len(m["content"]) for m in messages) > char_budget and len(messages) > 1:
             messages.pop(0)
-        if not wait_until_unloaded():
-            print("Loaded model did not unload; skipping request.")
-            continue
-        model = find_model(name, digest)
-        allowed, reason = preflight(model, opts["num_ctx"], opts["num_batch"])
-        if not allowed:
-            print("SAFETY BLOCK:", reason)
-            continue
+        if smart_session is not None:
+            try:
+                smart_session.preflight(opts)
+            except RuntimeError as exc:
+                print("SAFETY BLOCK:", exc)
+                continue
+        else:
+            if not wait_until_unloaded():
+                print("Loaded model did not unload; skipping request.")
+                continue
+            model = find_model(name, state.get("model_digest"))
+            allowed, reason = preflight(model, opts["num_ctx"], opts["num_batch"])
+            if not allowed:
+                print("SAFETY BLOCK:", reason)
+                continue
         request_options = dict(opts)
-        request_options["num_predict"] = 256
+        request_options["num_predict"] = QUALITY_LIMIT if smart_session is not None else 256
         try:
             answer = stream_chat(name, messages, request_options)
         except RuntimeError as exc:
@@ -475,7 +553,7 @@ def chat():
 
 
 def main():
-    print("LocalAI Optimizer v0.6.0")
+    print("LocalAI Optimizer v0.7.0")
     print("=== APPLY / RESTORE / CHAT ===")
     while True:
         print("\n1. Apply Optimization (manual only)")

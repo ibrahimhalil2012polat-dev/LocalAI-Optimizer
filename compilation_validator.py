@@ -144,6 +144,13 @@ def run_command(arguments, directory):
     environment["DOTNET_NOLOGO"] = "1"
     environment["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1"
     environment["DOTNET_CLI_DO_NOT_USE_MSBUILD_SERVER"] = "1"
+    # The stub project has no dependencies. Keep NuGet configuration and
+    # caches inside the disposable build folder rather than the user profile.
+    if os.name == "nt":
+        appdata = directory / "appdata"
+        appdata.mkdir(exist_ok=True)
+        environment["APPDATA"] = str(appdata)
+    environment["NUGET_PACKAGES"] = str(directory / "packages")
 
     try:
         return subprocess.run(
