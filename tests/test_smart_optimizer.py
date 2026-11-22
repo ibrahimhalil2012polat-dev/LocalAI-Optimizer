@@ -47,7 +47,7 @@ def passing_quality(options):
 
 def tested_profile(s):
     options = {**smart.reference(4096), "num_thread": 2, "num_batch": 64}
-    base, candidate = [sample(100)] * 2, [sample(85)] * 2
+    base, candidate = [sample(100)] * 3, [sample(85)] * 3
     return {
         "schema_version": smart.SCHEMA, "method": smart.METHOD, "model": s.identity["model"],
         "identity": copy.deepcopy(s.identity), "recommended_options": options,
@@ -65,12 +65,22 @@ class SmartOptimizerTests(unittest.TestCase):
         s = session()
         s.max_context = 4096
         s.identity["hardware"]["affinity"] = [0, 1]
-        with patch.object(s, "memory_margin", side_effect=[runtime.GB // 2, 2 * runtime.GB, -1]):
+        margins = {(1024, 512): runtime.GB // 2, (2048, 512): 2 * runtime.GB,
+                   (4096, 512): -1, (2048, 256): -1}
+        with patch.object(s, "memory_margin", side_effect=lambda *key: margins.get(key, 0)):
             plans = smart.candidate_sets(s)
         self.assertEqual([ctx for ctx, _ in plans], [1024, 2048])
         self.assertTrue(all(1 <= o["num_thread"] <= 2 for _, options in plans for o in options))
         self.assertEqual({o["num_batch"] for o in plans[0][1]}, {64, 128})
-        self.assertEqual({o["num_batch"] for o in plans[1][1]}, {128, 256})
+        self.assertEqual({o["num_batch"] for o in plans[1][1]}, {64})
+
+    def test_candidates_cross_threads_with_both_batches(self):
+        s = session()
+        s.max_context = 1024
+        with patch.object(s, "memory_margin", return_value=2 * runtime.GB):
+            [(_, candidates)] = smart.candidate_sets(s)
+        self.assertEqual({(o["num_thread"], o["num_batch"]) for o in candidates},
+                         {(2, 64), (2, 256), (4, 64), (4, 256), (6, 64), (6, 256)})
 
     def test_preflight_blocks_busy_low_commit_and_missing_commit(self):
         s = session()
@@ -105,12 +115,84 @@ class SmartOptimizerTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaisesRegex(RuntimeError, "does not match"):
                 smart.verify_profile(changed, s)
 
-    def test_speed_requires_two_consistent_equivalent_runs(self):
-        self.assertIsNotNone(smart.speed_gain([sample(100)] * 2, [sample(85)] * 2))
-        self.assertIsNone(smart.speed_gain([sample(100)] * 2, [sample(85), sample(97)]))
-        self.assertIsNone(smart.speed_gain([sample(200), sample(100)], [sample(80)] * 2))
+    def test_speed_requires_three_consistent_equivalent_runs(self):
+        base, fast = [sample(100)] * 3, [sample(85)] * 3
+        self.assertIsNotNone(smart.speed_gain(base, fast))
+        self.assertIsNotNone(smart.speed_gain(base, [sample(95)] * 3))
         changed = {**sample(85), "output_sha256": "b" * 64}
-        self.assertIsNone(smart.speed_gain([sample(100)] * 2, [sample(85), changed]))
+        for reference, candidate, expected in (
+            (base[:2], fast[:2], "INCONCLUSIVE_MEASUREMENTS"),
+            (base, [*fast[:2], sample(96)], "BELOW_MINIMUM_GAIN"),
+            ([sample(200), *base[:2]], fast, "UNSTABLE_TIMING"),
+            (base, [*fast[:2], changed], "DIFFERENT_OUTPUT_OR_TOKEN_COUNTS"),
+            (base, [*fast[:2], {**sample(85), "eval_count": 49}],
+             "DIFFERENT_OUTPUT_OR_TOKEN_COUNTS"),
+        ):
+            with self.subTest(expected=expected):
+                comparison = smart.compare_speed(reference, candidate)
+                self.assertIsNone(comparison["gain"])
+                self.assertEqual(comparison["status"], expected)
+
+    def test_benchmark_rotates_reference_with_identical_workload(self):
+        options = tested_profile(session())["recommended_options"]
+        context = options["num_ctx"]
+        candidates = [options, {**options, "num_batch": 128}]
+        final = {**sample(100), "done_reason": "stop"}
+        with (
+            patch.object(smart, "run_prompt", return_value=(final, "content")) as generate,
+            redirect_stdout(io.StringIO()),
+        ):
+            bench = smart.benchmark(session(), context, candidates)
+        self.assertEqual(bench["round_order"], [[0, 1, 2], [2, 1, 0], [2, 0, 1]])
+        self.assertEqual(bench["reference_summary"]["valid_runs"], 3)
+        for trial in bench["trials"]:
+            self.assertEqual(trial["status"], "BELOW_MINIMUM_GAIN")
+            self.assertEqual(trial["summary"]["median_ns"], 200)
+        for call in generate.call_args_list:
+            self.assertEqual(call.args[1], smart.BENCH_PROMPT)
+            expected = smart.common_options(smart.reference(context), smart.BENCH_LIMIT)
+            actual = call.args[2].copy()
+            actual.pop("num_thread", None)
+            actual["num_batch"] = expected["num_batch"]
+            self.assertEqual(actual, expected)
+
+    def test_interrupted_run_keeps_measurement_without_issuing_profile(self):
+        s = session()
+        options = tested_profile(s)["recommended_options"]
+        final = {**sample(100), "done_reason": "stop"}
+        with (
+            tempfile.TemporaryDirectory() as folder,
+            redirect_stdout(io.StringIO()),
+            patch.object(smart, "RESULTS", Path(folder)),
+            patch.object(smart, "run_prompt",
+                         side_effect=[(final, "content"), RuntimeError("Low commit")]),
+            patch.object(smart, "quality_check") as quality,
+        ):
+            result = smart.optimize_model(s, [(options["num_ctx"], [options])])
+            self.assertEqual(len(list(Path(folder).glob("smart_*.json"))), 1)
+        quality.assert_not_called()
+        self.assertEqual(result["status"], "INCONCLUSIVE")
+        self.assertEqual(result["reason"], "Low commit")
+        self.assertEqual(result["benchmarks"][0]["reference_summary"]["valid_runs"], 1)
+        self.assertNotIn("recommended_options", result)
+
+    def test_live_comparisons_require_explicit_test_confirmation(self):
+        s = session()
+        options = tested_profile(s)["recommended_options"]
+        model = {"name": s.identity["model"], "size": 100}
+        with (
+            patch.object(smart, "model_list", side_effect=[[model], []] * 2),
+            patch.object(smart.Session, "inspect", return_value=s),
+            patch.object(smart, "candidate_sets", return_value=[(4096, [options])]),
+            patch.object(smart, "optimize_model", return_value={}) as optimize,
+            redirect_stdout(io.StringIO()),
+        ):
+            with patch("builtins.input", side_effect=["1", "yes"]):
+                smart.interactive()
+            optimize.assert_not_called()
+            with patch("builtins.input", side_effect=["1", "TEST"]):
+                smart.interactive()
+            optimize.assert_called_once()
 
     def test_quality_uses_same_prompt_context_and_generation_controls(self):
         s = session()
@@ -127,6 +209,46 @@ class SmartOptimizerTests(unittest.TestCase):
             self.assertEqual(first.args[1], second.args[1])
             for field in ("num_ctx", "num_gpu", "num_predict", "seed", "temperature"):
                 self.assertEqual(first.args[2][field], second.args[2][field])
+
+    def test_interrupted_quality_keeps_failures_and_counts_missing_checks(self):
+        s = session()
+        options = tested_profile(s)["recommended_options"]
+        final = {**sample(100), "done_reason": "stop"}
+        assessment = {"structure": "PASS", "compilation": "PASS", "behavior": "FAIL"}
+        with (
+            patch.object(smart, "run_prompt",
+                         side_effect=[(final, "content"), RuntimeError("Low commit")]),
+            patch.object(smart, "get_dotnet_framework", return_value="net8.0"),
+            patch.object(smart, "assess_source", return_value=assessment),
+            redirect_stdout(io.StringIO()),
+        ):
+            result = smart.quality_check(s, options)
+        self.assertEqual(result["status"], "INCONCLUSIVE")
+        self.assertEqual(result["interrupted"], "Low commit")
+        self.assertEqual(result["summary"]["baseline"], {"PASS": 2, "FAIL": 1, "INCONCLUSIVE": 9})
+        self.assertEqual(result["summary"]["candidate"], {"PASS": 0, "FAIL": 0, "INCONCLUSIVE": 12})
+
+    def test_no_gain_preserves_active_settings_and_skips_quality(self):
+        s = session()
+        options = tested_profile(s)["recommended_options"]
+        bench = {"context": options["num_ctx"], "trials": [{"options": options, "gain": None}]}
+        with (
+            tempfile.TemporaryDirectory() as folder,
+            redirect_stdout(io.StringIO()),
+            patch.object(smart, "RESULTS", Path(folder) / "results"),
+            patch.object(smart, "PROFILES", Path(folder) / "profiles"),
+            patch.object(smart, "benchmark", return_value=bench),
+            patch.object(smart, "quality_check") as quality,
+        ):
+            smart.PROFILES.mkdir()
+            active = smart.PROFILES / "active_optimization.json"
+            active.write_text("{}", encoding="utf-8")
+            result = smart.optimize_model(s, [(options["num_ctx"], [options])])
+            self.assertEqual(list(smart.PROFILES.iterdir()), [active])
+            self.assertEqual(active.read_text(encoding="utf-8"), "{}")
+        quality.assert_not_called()
+        self.assertEqual(result["status"], "NO_REPEATABLE_GAIN")
+        self.assertNotIn("recommended_options", result)
 
     def test_quality_regression_shared_failure_and_uncertainty_are_blocked(self):
         s = session()
@@ -152,7 +274,7 @@ class SmartOptimizerTests(unittest.TestCase):
         s = session()
         template = tested_profile(s)
         options = template["recommended_options"]
-        base, trials = [sample(100)] * 2, [sample(85)] * 2
+        base, trials = [sample(100)] * 3, [sample(85)] * 3
         bench = {"context": 4096, "reference": base, "trials": [
             {"options": options, "runs": trials, "gain": smart.speed_gain(base, trials)}]}
         with tempfile.TemporaryDirectory() as folder, redirect_stdout(io.StringIO()):
@@ -164,7 +286,10 @@ class SmartOptimizerTests(unittest.TestCase):
                 failed = passing_quality(options)
                 failed["status"] = "INCONCLUSIVE"
                 with patch.object(smart, "quality_check", return_value=failed):
-                    self.assertNotIn("profile", smart.optimize_model(s, [(4096, [options])]))
+                    blocked = smart.optimize_model(s, [(4096, [options])])
+                    self.assertNotIn("profile", blocked)
+                    self.assertNotIn("recommended_options", blocked)
+                    self.assertEqual(blocked["quality_candidate_options"], options)
                 with patch.object(smart, "quality_check", return_value=passing_quality(options)):
                     result = smart.optimize_model(s, [(4096, [options])])
                 self.assertTrue((base_dir / "profiles" / result["profile"]).is_file())

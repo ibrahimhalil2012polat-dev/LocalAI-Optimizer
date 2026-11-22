@@ -19,8 +19,9 @@ ROOT = Path(__file__).resolve().parent
 PROFILES = ROOT / "profiles"
 RESULTS = ROOT / "results"
 SCHEMA = 2
-METHOD = "smart-cpu-v1"
+METHOD = "smart-cpu-v2"
 REFERENCE_BATCH = 512
+BENCH_ROUNDS = 3
 STAGES = ("structure", "compilation", "behavior")
 MIN_GAIN = 0.05
 MAX_SPREAD = 0.20
@@ -64,13 +65,14 @@ def candidate_sets(session):
         margin = session.memory_margin(context, REFERENCE_BATCH)
         if margin < 0:
             continue
-        small_batch = 64 if margin < GB else 128
         large_batch = 128 if margin < GB else 256 if margin < 3 * GB else 512
-        pairs = [(max(1, physical // 2), small_batch), (physical, small_batch),
-                 (logical, large_batch), (physical, large_batch)]
+        threads = sorted({max(1, physical // 2), physical, logical})
+        safe_batches = [batch for batch in (64, large_batch)
+                        if session.memory_margin(context, batch) >= 0]
         options = [{**reference(context), "num_thread": t, "num_batch": b}
-                   for t, b in dict.fromkeys(pairs)]
-        plans.append((context, options))
+                   for t in threads for b in safe_batches]
+        if options:
+            plans.append((context, options))
     return plans
 
 
@@ -93,46 +95,74 @@ def measurement(final, output, options):
     return {**{key: final[key] for key in fields}, "output_sha256": fingerprint(output)}
 
 
-def speed_gain(baseline, candidate):
-    if len(baseline) != 2 or len(candidate) != 2 or any(
-        item is None for item in baseline + candidate
-    ):
-        return None
-    pairs = list(zip(baseline, candidate))
+def timing_summary(runs):
+    samples = [item["prompt_eval_duration"] + item["eval_duration"]
+               for item in runs if item is not None]
+    return {
+        "valid_runs": len(samples),
+        "median_ns": statistics.median(samples) if samples else None,
+        "spread": max(samples) / min(samples) - 1 if samples else None,
+    }
+
+
+def compare_speed(baseline, candidate):
+    report = {"gain": None, "round_gains": []}
+    if any(len(group) != BENCH_ROUNDS or None in group for group in (baseline, candidate)):
+        return {**report, "status": "INCONCLUSIVE_MEASUREMENTS"}
     signatures = {(item["prompt_eval_count"], item["eval_count"], item["output_sha256"])
                   for group in (baseline, candidate) for item in group}
     if len(signatures) != 1:
-        return None
-    for group in (baseline, candidate):
-        times = [item["prompt_eval_duration"] + item["eval_duration"] for item in group]
-        if min(times) <= 0 or max(times) > min(times) * (1 + MAX_SPREAD):
-            return None
-    gains = []
-    for default, trial in pairs:
-        base_ns = default["prompt_eval_duration"] + default["eval_duration"]
-        trial_ns = trial["prompt_eval_duration"] + trial["eval_duration"]
-        if base_ns <= 0 or trial_ns <= 0:
-            return None
-        gains.append(1 - trial_ns / base_ns)
-    return statistics.median(gains) if min(gains) >= MIN_GAIN else None
+        return {**report, "status": "DIFFERENT_OUTPUT_OR_TOKEN_COUNTS"}
+    base_times, trial_times = (
+        [item["prompt_eval_duration"] + item["eval_duration"] for item in group]
+        for group in (baseline, candidate)
+    )
+    if any(min(times) <= 0 for times in (base_times, trial_times)):
+        return {**report, "status": "INCONCLUSIVE_MEASUREMENTS"}
+    gains = [1 - trial / base for base, trial in zip(base_times, trial_times)]
+    report["round_gains"] = gains
+    if any(max(times) > min(times) * (1 + MAX_SPREAD)
+           for times in (base_times, trial_times)):
+        return {**report, "status": "UNSTABLE_TIMING"}
+    if any(trial > base * (1 - MIN_GAIN) for base, trial in zip(base_times, trial_times)):
+        return {**report, "status": "BELOW_MINIMUM_GAIN"}
+    return {**report, "gain": statistics.median(gains), "status": "REPEATABLE_GAIN"}
+
+
+def speed_gain(baseline, candidate):
+    return compare_speed(baseline, candidate)["gain"]
+
+
+def benchmark_orders(size):
+    indices = list(range(1, size))
+    middle = len(indices) // 2
+    return [[0, *indices], [*reversed(indices), 0],
+            [*indices[middle:], 0, *indices[:middle]]]
 
 
 def benchmark(session, context, candidates):
     choices = [reference(context), *candidates]
     samples = [[] for _ in choices]
-    for order in (range(len(choices)), reversed(range(len(choices)))):
-        for index in order:
-            config = choices[index]
-            print(f"Benchmark: {config}", flush=True)
-            options = common_options(config, BENCH_LIMIT)
-            final, output = run_prompt(session, BENCH_PROMPT, options)
-            result = measurement(final, output, options)
-            if final.get("done_reason") not in ("stop", "length"):
-                result = None
-            samples[index].append(result)
+    orders = benchmark_orders(len(choices))
+    interrupted = None
+    try:
+        for round_number, order in enumerate(orders, 1):
+            for index in order:
+                config = choices[index]
+                print(f"Benchmark round {round_number}/{BENCH_ROUNDS}: {config}", flush=True)
+                options = common_options(config, BENCH_LIMIT)
+                final, output = run_prompt(session, BENCH_PROMPT, options)
+                result = measurement(final, output, options)
+                if final.get("done_reason") not in ("stop", "length"):
+                    result = None
+                samples[index].append(result)
+    except (KeyboardInterrupt, RuntimeError, OSError) as exc:
+        interrupted = str(exc) or "Cancelled"
     return {"context": context, "reference_options": choices[0], "reference": samples[0],
+            "reference_summary": timing_summary(samples[0]), "round_order": orders,
+            "interrupted": interrupted,
             "trials": [{"options": config, "runs": run,
-                        "gain": speed_gain(samples[0], run)}
+                        "summary": timing_summary(run), **compare_speed(samples[0], run)}
                        for config, run in zip(candidates, samples[1:])]}
 
 
@@ -177,22 +207,41 @@ def quality_check(session, candidate):
     base_options = common_options(baseline, QUALITY_LIMIT)
     tuned_options = common_options(candidate, QUALITY_LIMIT)
     cases = []
+    interrupted = None
     for index, test in enumerate(TESTS):
         prompt = build_prompt(test)
         print(f"Quality comparison: {test['id']}", flush=True)
-        pair = {}
+        pair = {"baseline": {}, "candidate": {}}
         configs = [("baseline", base_options), ("candidate", tuned_options)]
         for label, options in configs if index % 2 == 0 else reversed(configs):
-            final, output = run_prompt(session, prompt, options)
-            metrics = measurement(final, output, options)
-            if metrics is None or final.get("done_reason") != "stop":
+            try:
+                final, output = run_prompt(session, prompt, options)
+                metrics = measurement(final, output, options)
                 pair[label] = {"metrics": metrics, "finish": final.get("done_reason")}
-                continue
-            pair[label] = {"metrics": metrics, "finish": "stop",
-                           **assess_source(extract_code(output), test, framework)}
+                if metrics is not None and final.get("done_reason") == "stop":
+                    pair[label].update(assess_source(extract_code(output), test, framework))
+            except (KeyboardInterrupt, RuntimeError, OSError) as exc:
+                interrupted = str(exc) or "Cancelled"
+                break
         cases.append({"task": test["id"], "prompt_sha256": fingerprint(prompt), **pair})
+        if interrupted:
+            break
     return {"baseline_options": base_options, "candidate_options": tuned_options,
-            "cases": cases, "status": quality_status(cases)}
+            "cases": cases, "status": quality_status(cases),
+            "summary": quality_summary(cases), "interrupted": interrupted}
+
+
+def quality_summary(cases):
+    summary = {}
+    for label in ("baseline", "candidate"):
+        results = [case[label].get(stage) for case in cases for stage in STAGES]
+        passed, failed = results.count("PASS"), results.count("FAIL")
+        summary[label] = {
+            "PASS": passed,
+            "FAIL": failed,
+            "INCONCLUSIVE": len(TESTS) * len(STAGES) - passed - failed,
+        }
+    return summary
 
 
 def quality_status(cases):
@@ -240,15 +289,16 @@ def check_options(session, options):
 
 
 def verify_profile(profile, session):
-    if (profile.get("schema_version") != SCHEMA or profile.get("method") != METHOD
-            or profile.get("identity") != session.identity
+    if profile.get("schema_version") != SCHEMA or profile.get("method") != METHOD:
+        raise RuntimeError("Smart profile uses an older or unsupported test method. Run Smart Auto Optimizer again")
+    if (profile.get("identity") != session.identity
             or profile.get("automatic_apply_approved") is not False):
         raise RuntimeError("Smart profile does not match the model digest, hardware or Ollama version")
     options = profile.get("recommended_options")
     check_options(session, options)
     context = options["num_ctx"]
     outcome = profile.get("quality", {})
-    if (outcome.get("status") != "LIMITED_TESTS_PASSED"
+    if (outcome.get("status") != "LIMITED_TESTS_PASSED" or outcome.get("interrupted")
             or outcome.get("baseline_options") != common_options(reference(context), QUALITY_LIMIT)
             or outcome.get("candidate_options") != common_options(options, QUALITY_LIMIT)
             or quality_status(outcome.get("cases")) != "LIMITED_TESTS_PASSED"):
@@ -256,7 +306,7 @@ def verify_profile(profile, session):
     performance = profile.get("performance", {})
     try:
         gain = speed_gain(performance["reference"], performance["candidate"])
-    except (KeyError, TypeError, ValueError, OverflowError):
+    except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
         gain = None
     if (gain is None or performance.get("gain") != gain
             or performance.get("prompt_sha256") != fingerprint(BENCH_PROMPT)
@@ -274,7 +324,10 @@ def optimize_model(session, plans):
               "automatic_apply_approved": False}
     try:
         for context, candidates in plans:
-            report["benchmarks"].append(benchmark(session, context, candidates))
+            group = benchmark(session, context, candidates)
+            report["benchmarks"].append(group)
+            if group.get("interrupted"):
+                raise RuntimeError(group["interrupted"])
         winner = choose_winner(report["benchmarks"])
         if winner is None:
             report["status"] = "NO_REPEATABLE_GAIN"
@@ -282,7 +335,9 @@ def optimize_model(session, plans):
         options = winner["options"]
         group = next(row for row in report["benchmarks"] if row["context"] == options["num_ctx"])
         quality = quality_check(session, options)
-        report.update(quality=quality, recommended_options=options, status=quality["status"])
+        report.update(quality=quality, quality_candidate_options=options, status=quality["status"])
+        if quality.get("interrupted"):
+            raise RuntimeError(quality["interrupted"])
         if quality["status"] == "LIMITED_TESTS_PASSED":
             session.preflight(options)
             profile = {
@@ -299,6 +354,7 @@ def optimize_model(session, plans):
             profile_path = PROFILES / f"optimized_smart_{stamp}.json"
             write_json(profile_path, profile)
             report["profile"] = profile_path.name
+            report["recommended_options"] = options
         return report
     except (KeyboardInterrupt, RuntimeError, OSError, ValueError, TypeError) as exc:
         report.update(status="INCONCLUSIVE", reason=str(exc) or "Cancelled")
@@ -329,10 +385,25 @@ def interactive():
         print(f"{context} tokens: " + ", ".join(
             f"{item['num_thread']} threads / batch {item['num_batch']}" for item in choices
         ))
-    print("Runs local inference and saves a report. Apply is a separate menu action.")
+    request_count = BENCH_ROUNDS * sum(1 + len(choices) for _, choices in plans)
+    print(f"{BENCH_ROUNDS} rounds per context: {request_count} benchmark requests, "
+          f"plus up to {2 * len(TESTS)} quality requests. "
+          "Runs local CPU inference and saves a report. Apply is a separate menu action.")
     if input("Type TEST to run the comparisons: ").strip() == "TEST":
         report = optimize_model(session, plans)
         if report.get("profile"):
             print(f"Profile available for manual Apply: {report['profile']}")
-        elif report.get("reason"):
-            print(report["reason"])
+        else:
+            print("No Smart profile was recommended. Current settings remain in use.")
+            if report.get("reason"):
+                print(report["reason"])
+        if quality := report.get("quality"):
+            for label, counts in quality["summary"].items():
+                print(f"Quality {label}: {counts['PASS']}/{len(TESTS) * len(STAGES)} passed; "
+                      f"{counts['FAIL']} failed, {counts['INCONCLUSIVE']} inconclusive.")
+            for case in quality["cases"]:
+                for label in ("baseline", "candidate"):
+                    unmet = [f"{stage}={case[label].get(stage, 'INCONCLUSIVE')}"
+                             for stage in STAGES if case[label].get(stage) != "PASS"]
+                    if unmet:
+                        print(f"  {case['task']} ({label}): {', '.join(unmet)}")

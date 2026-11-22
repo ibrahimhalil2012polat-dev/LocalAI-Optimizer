@@ -5,6 +5,7 @@
 - Added Smart Auto Optimizer for bounded CPU thread, batch and context search on Windows.
 - Added model digest, CPU and Ollama version matching, conservative memory preflight and guarded local requests.
 - Added paired performance and code quality comparisons with matching prompts and contexts. Smart profiles require all limited quality checks to pass and explicit activation through Apply.
+- Test up to six thread and batch combinations per context over three rounds. Report timing, rejection reasons and unmet quality checks before recommending a profile.
 - Preserved the legacy Apply, Chat and Restore workflow.
 
 ## 0.6.0 — Alpha (unreleased)
