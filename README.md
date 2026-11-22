@@ -2,7 +2,7 @@
 
 An open-source, Windows-first toolkit for inspecting hardware, estimating local LLM memory requirements, and benchmarking Ollama on resource-constrained computers.
 
-**Status: v0.5.0 Alpha — experimental output and code-quality checks added to preliminary CPU optimization profiles.** The toolkit does not apply settings automatically; failed or inconclusive quality checks must not be treated as approval.
+**Status: v0.6.0 Alpha.** Use one menu to analyze, test and manually activate an experimental CPU profile for LocalAI Optimizer chat. Ollama model weights and global defaults are untouched.
 
 ## Features
 
@@ -48,10 +48,18 @@ uv pip install --python .\.venv\Scripts\python.exe -r requirements.txt
 
 Launch Ollama, or run `ollama serve` in a separate terminal if it is not running.
 
-### Hardware inventory
+### Main menu
 
 ```powershell
 .\.venv\Scripts\python.exe main.py
+```
+
+Go through **Analyze → Optimize → Quality Check → Apply Optimization → Chat → Restore Defaults**. **Status** shows the active settings and any shared quality failures. Run the Optimize stages in order and use the same model throughout. In Quality Check, generate samples in **Detailed** mode, run the three validators, then create the quality summary. These menus launch the existing tools so you can see each report and decide when to continue.
+
+### Hardware inventory
+
+```powershell
+.\.venv\Scripts\python.exe main.py --analyze
 ```
 
 ### Read-only compatibility analysis
@@ -148,7 +156,15 @@ Run the included non-inference smoke tests:
 - Tests are small and partly pattern-based; generated programs are not run in a sandbox or the Unity Editor.
 - The baseline/optimized quality options are fixed and not propagated from per-user optimizer profiles.
 - Compiling untrusted C# consumes local compiler resources; the controlled project avoids invoking the generated assembly, but this is **not a security sandbox**.
-- No persistent Ollama model settings are changed, and there is no apply/restore workflow yet.
+## Apply, chat and restore (v0.6.0)
+
+Apply matches a combined profile and quality evidence to the exact installed model digest. The profile must match the machine and the tested CPU options. The chat context is capped at the context used in the quality test. Incomplete or inconclusive checks, optimized-only failures and mismatched settings block activation. Review the preview and type `APPLY` when all limited checks pass, or `I ACCEPT` to opt in with explicitly listed shared failures. A memory preflight must pass before saving the active profile.
+
+Activation writes `profiles/active_optimization.json` locally. Chat passes the active settings to Ollama on localhost for each guarded request. It checks the model and report again before use and keeps a short history within the session. Restore Defaults asks for `RESTORE` and removes the active configuration. The local profile and report directories are ignored by Git.
+
+The earlier Windows smoke test used `qwen2.5-coder:7b` at `num_thread=8`, `num_batch=256`, `num_ctx=2048` and `num_gpu=0`. The apply, status, chat (response `OK`) and restore steps completed. Both configurations passed 11 of 12 limited checks and failed `unity_door/behavior`. That result supports manual testing only. The smoke test measures connectivity and the profile lifecycle. Quality approval and performance gains require separate evidence.
+
+`apply_optimization.py` also provides a standalone Apply, Chat, Restore and Status menu.
 
 ## Initial manual validation
 
