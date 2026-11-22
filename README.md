@@ -2,7 +2,7 @@
 
 An open-source, Windows-first toolkit for inspecting hardware, estimating local LLM memory requirements, and benchmarking Ollama on resource-constrained computers.
 
-**Status: v0.6.0 Alpha.** Use one menu to analyze, test and manually activate an experimental CPU profile for LocalAI Optimizer chat. Ollama model weights and global defaults are untouched.
+**Status: v0.7.0 Alpha.** Smart Auto Optimizer searches for a CPU profile for local Ollama on Windows. Apply remains a separate action for LocalAI Optimizer chat.
 
 ## Features
 
@@ -54,7 +54,17 @@ Launch Ollama, or run `ollama serve` in a separate terminal if it is not running
 .\.venv\Scripts\python.exe main.py
 ```
 
-Go through **Analyze → Optimize → Quality Check → Apply Optimization → Chat → Restore Defaults**. **Status** shows the active settings and any shared quality failures. Run the Optimize stages in order and use the same model throughout. In Quality Check, generate samples in **Detailed** mode, run the three validators, then create the quality summary. These menus launch the existing tools so you can see each report and decide when to continue.
+Choose **Smart Auto Optimizer**, select a local model, review the proposed candidates, and type `TEST`. A passing candidate appears under **Apply Optimization**, where you can preview it and type `APPLY`. **Chat** uses the active options, **Status** shows them, and **Restore Defaults** removes the active settings after confirmation.
+
+The staged **Optimize** and **Quality Check** menus remain available for existing experimental profiles. For that workflow, run the Optimize stages in order with the same model. Generate code samples in **Detailed** mode, run the three validators, then create the quality summary.
+
+### Smart Auto Optimizer
+
+- Available CPU cores, the model's context limit and current Windows RAM and commit headroom determine the thread, batch and requested context candidates. The search is CPU only and currently supports local text completion GGUF models with supported Qwen2 or Llama memory metadata.
+- Each context has its own reference with Ollama's automatic thread selection and a batch of 512. The candidate and reference use the same chat prompt, requested context, seed and output cap. Two rounds reverse execution order. Only trials with identical benchmark output and token counts, timing spread within 20%, and at least 5% less prompt plus generation time in each round qualify. Cold load time is recorded separately.
+- The highest qualifying context takes priority. Within that context, the largest median time reduction wins. That configuration then runs the same four Python and Unity C# tasks as its reference. Any regression, shared requirement failure, or uncertainty blocks a Smart profile. C# checks use the local .NET SDK and Unity stubs. Generated samples are compiled or inspected without running them.
+- The Smart profile records the full model SHA-256 digest, model and runner metadata, Ollama server version, Windows build, CPU identity and topology, available CPU affinity and installed RAM. Apply and Chat verify matching evidence. Preflight checks an idle Ollama, model limits, physical memory and Windows commit headroom before each Smart request. The client closes the request on critical memory pressure or timeout. An Ollama server can take time to release resources afterward.
+- The search can take several minutes. It uses a fixed short benchmark prompt at each requested context, so the result does not measure maximum length prompts or guarantee performance or quality on other workloads. Results and profiles stay in the local `results/` and `profiles/` directories.
 
 ### Hardware inventory
 

@@ -52,10 +52,16 @@
 - [x] Unified menu with individually launched optimization and quality stages
 - [ ] Validate the full workflow from a fresh install on additional Windows systems
 
+## v0.7.0 — Smart Auto Optimizer
+
+- [x] Select CPU thread, batch and context candidates using model limits and Windows memory headroom.
+- [x] Compare reference and candidate with the same prompt and context, then require all limited quality checks before presenting a profile for manual Apply.
+- [x] Match Smart profiles by model digest, detailed CPU and OS fingerprint, and Ollama server version.
+- [ ] Validate the Smart workflow on additional Windows machines and models.
+
 ## Next — Reliable optimization
 
 - [ ] Use a single shared memory policy across compatibility and benchmarking
-- [ ] Record Ollama version and more complete runtime fingerprints
 - [ ] Validate memory estimates on additional hardware and workloads
 - [ ] Separate paging from aggregate disk activity
 - [ ] Improve commit requirement estimation and server-side cancellation verification

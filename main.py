@@ -8,6 +8,7 @@ import subprocess
 from pathlib import Path
 
 import apply_optimization
+from smart_optimizer import interactive as smart_optimize
 
 GB = 1024 ** 3
 OLLAMA_URL = "http://127.0.0.1:11434"
@@ -132,7 +133,7 @@ def quality_check():
 
 
 def main():
-    parser = argparse.ArgumentParser(description="LocalAI Optimizer v0.6.0")
+    parser = argparse.ArgumentParser(description="LocalAI Optimizer v0.7.0")
     parser.add_argument("--analyze", action="store_true", help="Print hardware and model inventory")
     if parser.parse_args().analyze:
         analyze()
@@ -146,11 +147,12 @@ def main():
         ("Chat", apply_optimization.chat),
         ("Restore Defaults", apply_optimization.restore),
         ("Status", apply_optimization.status),
+        ("Smart Auto Optimizer", smart_optimize),
     ]
     labels = [label for label, _ in actions]
     while True:
         try:
-            choice = choose("LocalAI Optimizer v0.6.0", labels, "Exit")
+            choice = choose("LocalAI Optimizer v0.7.0", labels, "Exit")
             if choice is None:
                 return
             actions[choice][1]()
