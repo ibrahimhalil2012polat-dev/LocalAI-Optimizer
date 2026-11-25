@@ -260,3 +260,12 @@ See [ROADMAP.md](ROADMAP.md) and [CHANGELOG.md](CHANGELOG.md). Bug reports and r
 ## License
 
 [MIT](LICENSE).
+
+
+## Profile cache and historical performance estimates (experimental)
+
+Build combined profile can reuse a matching preliminary-validated profile created within the last 30 days. Matching requires model digest, system fingerprint, Ollama version and validated options. Existing profiles without cache metadata must first be regenerated through the normal path. Reuse is optional and still requires the existing memory preflight and a guarded validation run. Changed output, generation slowdown over 20%, or RAM increase over 20% blocks preliminary approval. Quality checks and manual activation remain unchanged. Client environment values are recorded but may differ from the actual Ollama server configuration.
+
+The Optimize menu also includes **Estimate performance from recent profiles**. It reports observed speed and RAM ranges for matching settings and an estimated generation time for 128 tokens. This is historical data, not a hardware-independent speed predictor. Model loading and prompt processing time are excluded; without matching measurements the tool reports insufficient data. No model is loaded during estimation.
+
+Run tests using `python -m unittest discover -s tests -p test_profile_cache.py`.
