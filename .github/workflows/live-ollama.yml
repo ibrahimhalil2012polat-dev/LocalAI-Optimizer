@@ -1,0 +1,77 @@
+name: Live Ollama smoke test
+
+on:
+  push:
+    branches: [profile-cache-performance]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-ollama:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Python tests
+        run: |
+          python -m pip install -r requirements.txt
+          python -m unittest discover -s tests -v
+          python -m compileall -q .
+      - name: Install Ollama and start service
+        run: |
+          curl -fsSL https://ollama.com/install.sh -o /tmp/install-ollama.sh
+          sh /tmp/install-ollama.sh
+          OLLAMA_HOST=127.0.0.1:11434 OLLAMA_NUM_PARALLEL=1 ollama serve > /tmp/ollama.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:11434/api/version; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/ollama.log
+          exit 1
+      - name: Download small real model
+        run: ollama pull qwen2.5:0.5b
+      - name: Actual CPU generation and safety preflight
+        run: |
+          python - <<'PY'
+          import json
+          import psutil
+          import context_optimizer as co
+          from compatibility import api, estimate_kv_cache
+          from benchmark import memory_limits, commit_available
+          from hardware_advisor import recommend
+          from optimizer import wait_until_unloaded
+          model = next(m for m in api("/api/tags")["models"] if m["name"] == "qwen2.5:0.5b")
+          assert wait_until_unloaded(), "Ollama did not unload"
+          info = api("/api/show", {"model": model["name"]})["model_info"]
+          ram = psutil.virtual_memory()
+          advice = recommend(model, info, total=ram.total, available=ram.available,
+                             physical=psutil.cpu_count(logical=False), logical=psutil.cpu_count(),
+                             reserve=memory_limits(ram.total)[0], estimate_kv=estimate_kv_cache,
+                             commit=commit_available())
+          print("HARDWARE ADVICE:", json.dumps(advice))
+          assert advice["status"] == "ESTIMATE_ONLY", advice
+          co.THREADS = advice["options"]["num_thread"]
+          co.BATCH = 128
+          ctx = 2048
+          allowed, reason = co.preflight(model, ctx, co.BATCH)
+          assert allowed, reason
+          a = co.test_context(model, ctx)
+          print("LIVE MEASUREMENT 1:", json.dumps(a))
+          assert wait_until_unloaded(), "Model did not unload after first run"
+          allowed, reason = co.preflight(model, ctx, co.BATCH)
+          assert allowed, reason
+          b = co.test_context(model, ctx)
+          print("LIVE MEASUREMENT 2:", json.dumps(b))
+          assert a["generation_speed"] > 0 and b["generation_speed"] > 0
+          assert a["output_hash"] == b["output_hash"], "Outputs differed"
+          assert wait_until_unloaded(), "Model did not unload after second run"
+          print("LIVE OLLAMA SMOKE TEST PASSED")
+          PY
+      - name: Ollama diagnostics
+        if: always()
+        run: tail -100 /tmp/ollama.log || true
