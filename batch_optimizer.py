@@ -6,6 +6,7 @@ import hashlib
 import threading
 import http.client
 import statistics
+from adaptive_search import finalists
 
 from pathlib import Path
 from datetime import datetime
@@ -194,16 +195,26 @@ def main():
     print("\nModel:", model["name"])
     print("Threads:", THREADS)
     print("Batch candidates:", BATCHES)
-    print("Total tests:", len(BATCHES) * RUNS)
+    mode = input("Mode: [1] Adaptive (default), [2] Full: ").strip()
+    if mode not in ("", "1", "2"):
+        return
+    adaptive = mode != "2"
+    print("Maximum tests:", len(BATCHES) * RUNS)
     if input("\nStart optimization? (y/n): ").strip().lower() != "y":
         return
 
     measurements = []
     failure = None
+    active = list(BATCHES)
+    screened_out = []
     try:
         for r in range(RUNS):
-            offset = r % len(BATCHES)
-            ordered = BATCHES[offset:] + BATCHES[:offset]
+            if adaptive and r == 2:
+                active = finalists(BATCHES, measurements, "batch", "prompt_speed", 128)
+                screened_out = [c for c in BATCHES if c not in active]
+                print("Third-round tests skipped:", screened_out)
+            offset = r % len(active)
+            ordered = active[offset:] + active[:offset]
             for batch in ordered:
                 print("\n" + "=" * 60)
                 print(f"Round: {r + 1}/{RUNS}")
@@ -261,7 +272,10 @@ def main():
             f"Variation: {m['variation_percent']}%"
         )
     same_input_length = len({m["prompt_tokens"] for m in measurements}) == 1
-    complete = len(summaries) == len(BATCHES) and failure is None and same_input_length
+    complete = len(summaries) == len(active) and failure is None and same_input_length
+    print("Tests performed:", len(measurements))
+    if screened_out:
+        print("Adaptive screening is preliminary; full comparison is available.")
     if complete:
         best = summaries[0]
         baseline = next(m for m in summaries if m["batch"] == 128)
@@ -285,6 +299,10 @@ def main():
         "model_digest": model.get("digest"),
         "threads": THREADS,
         "complete": complete,
+        "comparison_mode": "adaptive" if adaptive else "full",
+        "screened_out": screened_out,
+        "tests_performed": len(measurements),
+        "maximum_tests": len(BATCHES) * RUNS,
         "failure": failure,
         "same_input_length": same_input_length,
         "summaries": summaries,
