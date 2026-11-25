@@ -260,3 +260,12 @@ See [ROADMAP.md](ROADMAP.md) and [CHANGELOG.md](CHANGELOG.md). Bug reports and r
 ## License
 
 [MIT](LICENSE).
+
+
+## Adaptive benchmark mode (experimental)
+
+Thread and batch comparison now offer Adaptive (default) or Full mode. Adaptive measures every candidate twice, then runs the third repetition only for the baseline and candidates whose fastest screening measurement is within 15% of the strongest candidate's slowest measurement. If output hashes, token counts or screening speeds are inconsistent (over 10% spread), all candidates are repeated. Existing per-run memory safety checks are unchanged.
+
+For four candidates, the full mode performs 12 measurements; adaptive performs 9–12 (10–12 when the leader is not the baseline). Context and quality validation are unchanged. The heuristic may miss a better setting under variable workloads; use Full mode for exhaustive comparison. Reports record the mode, screened candidates and actual/maximum test counts; screened candidates retain raw measurements but are not eligible for the final ranking. No real-world speedup is guaranteed.
+
+Run the screening unit tests with `python -m unittest discover -s tests -p test_adaptive_search.py`.
