@@ -38,6 +38,8 @@ def load_report(prefix, model, validator=None):
             if validator and not validator(report):
                 continue
             print("Loaded:", path.name)
+            if report.get("screened_out"):
+                print("Adaptive report: some candidates were screened after two runs.")
             return report
         except (OSError, ValueError, TypeError, KeyError):
             continue
