@@ -6,6 +6,7 @@ import hashlib
 import threading
 import http.client
 import statistics
+from adaptive_search import finalists
 
 from pathlib import Path
 from datetime import datetime
@@ -197,16 +198,26 @@ def main():
     print("\nModel:", model["name"])
     print("Thread candidates:", candidates)
     print("Repetitions:", RUNS)
-    print("Total tests:", len(candidates) * RUNS)
+    mode = input("Mode: [1] Adaptive (default), [2] Full: ").strip()
+    if mode not in ("", "1", "2"):
+        return
+    adaptive = mode != "2"
+    print("Maximum tests:", len(candidates) * RUNS)
     if input("\nStart optimization? (y/n): ").lower().strip() != "y":
         return
 
     measurements = []
     failure = None
+    active = list(candidates)
+    screened_out = []
     try:
         for round_number in range(RUNS):
-            offset = round_number % len(candidates)
-            ordered = candidates[offset:] + candidates[:offset]
+            if adaptive and round_number == 2:
+                active = finalists(candidates, measurements, "threads", "tokens_per_second", None)
+                screened_out = [c for c in candidates if c not in active]
+                print("Third-round tests skipped:", screened_out)
+            offset = round_number % len(active)
+            ordered = active[offset:] + active[:offset]
             for threads in ordered:
                 print("\n" + "=" * 60)
                 print(f"Round: {round_number + 1}/{RUNS}")
@@ -256,7 +267,10 @@ def main():
             f"Variation: {summary['variation_percent']}%"
         )
 
-    complete = len(summaries) == len(candidates) and failure is None
+    complete = len(summaries) == len(active) and failure is None
+    print("Tests performed:", len(measurements))
+    if screened_out:
+        print("Adaptive screening is preliminary; full comparison is available.")
     if complete:
         best = summaries[0]
         baseline = next(r for r in summaries if r["threads"] is None)
@@ -277,6 +291,10 @@ def main():
         "model": model["name"],
         "model_digest": model.get("digest"),
         "complete": complete,
+        "comparison_mode": "adaptive" if adaptive else "full",
+        "screened_out": screened_out,
+        "tests_performed": len(measurements),
+        "maximum_tests": len(candidates) * RUNS,
         "failure": failure,
         "summaries": summaries,
         "measurements": measurements

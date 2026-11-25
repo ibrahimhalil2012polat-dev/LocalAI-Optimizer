@@ -260,3 +260,30 @@ See [ROADMAP.md](ROADMAP.md) and [CHANGELOG.md](CHANGELOG.md). Bug reports and r
 ## License
 
 [MIT](LICENSE).
+
+
+## Profile cache and historical performance estimates (experimental)
+
+Build combined profile can reuse a matching preliminary-validated profile created within the last 30 days. Matching requires model digest, system fingerprint, Ollama version and validated options. Existing profiles without cache metadata must first be regenerated through the normal path. Reuse is optional and still requires the existing memory preflight and a guarded validation run. Changed output, generation slowdown over 20%, or RAM increase over 20% blocks preliminary approval. Quality checks and manual activation remain unchanged. Client environment values are recorded but may differ from the actual Ollama server configuration.
+
+The Optimize menu also includes **Estimate performance from recent profiles**. It reports observed speed and RAM ranges for matching settings and an estimated generation time for 128 tokens. This is historical data, not a hardware-independent speed predictor. Model loading and prompt processing time are excluded; without matching measurements the tool reports insufficient data. No model is loaded during estimation.
+
+Run tests using `python -m unittest discover -s tests -p test_profile_cache.py`.
+
+
+## Adaptive benchmark mode (experimental)
+
+Thread and batch comparison now offer Adaptive (default) or Full mode. Adaptive measures every candidate twice, then runs the third repetition only for the baseline and candidates whose fastest screening measurement is within 15% of the strongest candidate's slowest measurement. If output hashes, token counts or screening speeds are inconsistent (over 10% spread), all candidates are repeated. Existing per-run memory safety checks are unchanged.
+
+For four candidates, the full mode performs 12 measurements; adaptive performs 9–12 (10–12 when the leader is not the baseline). Context and quality validation are unchanged. The heuristic may miss a better setting under variable workloads; use Full mode for exhaustive comparison. Reports record the mode, screened candidates and actual/maximum test counts; screened candidates retain raw measurements but are not eligible for the final ranking. No real-world speedup is guaranteed.
+
+Run the screening unit tests with `python -m unittest discover -s tests -p test_adaptive_search.py`.
+
+
+## Automatic hardware advisor (experimental)
+
+Select **Analyze** in the main menu or run `python main.py --analyze`. In addition to the existing hardware inventory, the advisor uses current available RAM, CPU core counts, CPU affinity (when available), Windows commit headroom (when available), and installed Ollama model metadata to propose CPU-only settings. It suggests physical-core-based threads, a conservative batch of 128, and the largest estimated fitting context among 1024, 2048, 4096 and 8192 within the model's reported limit.
+
+Estimates reserve at least 1.5 GiB and 12% of total RAM; unknown architectures, remote models, loaded models and insufficient memory produce no recommendation. GPU/VRAM optimization is not included. The advisor does not generate text, apply settings or create a validated profile. Run the existing controlled benchmarks before applying settings. The model-memory estimate assumes F16 KV cache and a single sequence.
+
+Unit tests: `python -m unittest discover -s tests -p test_hardware_advisor.py`.
