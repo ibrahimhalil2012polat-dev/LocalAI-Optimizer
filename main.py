@@ -116,7 +116,8 @@ def optimize():
         ("Compare threads", "optimizer.py"),
         ("Compare batches", "batch_optimizer.py"),
         ("Compare context sizes", "context_optimizer.py"),
-        ("Build combined profile", "combined_optimizer.py"),
+        ("Build combined profile (reuse recent cache when available)", "combined_optimizer.py"),
+        ("Estimate performance from recent profiles", "profile_cache.py"),
     ])
 
 
