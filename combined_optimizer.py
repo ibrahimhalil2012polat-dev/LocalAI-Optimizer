@@ -4,7 +4,8 @@ import psutil
 import platform
 
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
+from profile_cache import fingerprint, cached_profiles
 from compatibility import api
 from optimizer import wait_until_unloaded
 
@@ -102,37 +103,54 @@ def main():
     if not 1 <= choice <= len(models):
         return
     model = models[choice - 1]
-    print("\n=== LOADING HISTORICAL RESULTS ===")
-    thread_report = load_report("thread_optimization", model)
-    if thread_report is None:
-        print("Missing thread optimization report.")
-        return
-    thread_result = choose_threads(thread_report)
-    threads = thread_result["threads"]
-    if threads is None:
-        print("Default threads selected.")
-        print("Explicit thread calibration is required.")
-        return
+    try:
+        signature = fingerprint(api)
+    except Exception:
+        signature = None
+    hits = cached_profiles(PROFILES, model, signature)
+    cached = None
+    if hits:
+        print("Matching recent profile:", hits[0]["recommended_options"])
+        if input("Reuse settings and run one guarded validation? (y/n): ").strip().lower() == "y":
+            cached = hits[0]
+    if cached:
+        opts = cached["recommended_options"]
+        threads, batch, context = (opts[k] for k in ("num_thread", "num_batch", "num_ctx"))
+        thread_result = cached["historical_thread_result"]
+        batch_result = cached["historical_batch_result"]
+        context_result = cached["historical_context_result"]
+    else:
+        print("\n=== LOADING HISTORICAL RESULTS ===")
+        thread_report = load_report("thread_optimization", model)
+        if thread_report is None:
+            print("Missing thread optimization report.")
+            return
+        thread_result = choose_threads(thread_report)
+        threads = thread_result["threads"]
+        if threads is None:
+            print("Default threads selected.")
+            print("Explicit thread calibration is required.")
+            return
 
-    batch_report = load_report(
-        "batch_optimization", model,
-        lambda r: r.get("threads") == threads
-    )
-    if batch_report is None:
-        print("Missing compatible batch report.")
-        return
-    batch_result = choose_batch(batch_report)
-    batch = batch_result["batch"]
+        batch_report = load_report(
+            "batch_optimization", model,
+            lambda r: r.get("threads") == threads
+        )
+        if batch_report is None:
+            print("Missing compatible batch report.")
+            return
+        batch_result = choose_batch(batch_report)
+        batch = batch_result["batch"]
 
-    context_report = load_report(
-        "context_optimization", model,
-        lambda r: r.get("threads") == threads and r.get("batch") == batch
-    )
-    if context_report is None:
-        print("Missing compatible context report.")
-        return
-    context_result = choose_context(context_report)
-    context = context_result["context"]
+        context_report = load_report(
+            "context_optimization", model,
+            lambda r: r.get("threads") == threads and r.get("batch") == batch
+        )
+        if context_report is None:
+            print("Missing compatible context report.")
+            return
+        context_result = choose_context(context_report)
+        context = context_result["context"]
 
     print("\n=== PROPOSED CONFIGURATION ===")
     print("Model:", model["name"])
@@ -172,9 +190,26 @@ def main():
     validation = context_optimizer.test_context(current, context)
     expected_hashes = set(context_result.get("output_hashes", []))
     same_output = bool(expected_hashes) and expected_hashes == {validation["output_hash"]}
+    if cached:
+        same_output = same_output and validation["output_hash"] == cached["validation"]["output_hash"]
+    cache_performance_ok = not cached or (
+        validation["generation_speed"] >= cached["validation"]["generation_speed"] * 0.8
+        and validation["ram_increase_gib"] <= cached["validation"]["ram_increase_gib"] * 1.2
+    )
+    if not cache_performance_ok:
+        print("Cached performance changed significantly. Re-run full optimization.")
+    try:
+        if fingerprint(api) != signature:
+            signature = None
+    except Exception:
+        signature = None
 
     profile = {
         "schema_version": 1,
+        "cache_fingerprint": signature,
+        "cache_created_utc": datetime.now(timezone.utc).isoformat(),
+        "cache_reused": bool(cached),
+        "cache_performance_ok": cache_performance_ok,
         "model": model["name"],
         "model_digest": model["digest"],
         "hardware": {
@@ -193,7 +228,7 @@ def main():
         "historical_context_result": context_result,
         "validation": validation,
         "identical_validation_output": same_output,
-        "status": "PRELIMINARY_VALIDATED" if same_output else "REVIEW_REQUIRED",
+        "status": "PRELIMINARY_VALIDATED" if same_output and cache_performance_ok else "REVIEW_REQUIRED",
         "quality_fully_validated": False,
         "safety_override_allowed": False
     }
