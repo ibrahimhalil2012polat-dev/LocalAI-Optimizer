@@ -260,3 +260,12 @@ See [ROADMAP.md](ROADMAP.md) and [CHANGELOG.md](CHANGELOG.md). Bug reports and r
 ## License
 
 [MIT](LICENSE).
+
+
+## Automatic hardware advisor (experimental)
+
+Select **Analyze** in the main menu or run `python main.py --analyze`. In addition to the existing hardware inventory, the advisor uses current available RAM, CPU core counts, CPU affinity (when available), Windows commit headroom (when available), and installed Ollama model metadata to propose CPU-only settings. It suggests physical-core-based threads, a conservative batch of 128, and the largest estimated fitting context among 1024, 2048, 4096 and 8192 within the model's reported limit.
+
+Estimates reserve at least 1.5 GiB and 12% of total RAM; unknown architectures, remote models, loaded models and insufficient memory produce no recommendation. GPU/VRAM optimization is not included. The advisor does not generate text, apply settings or create a validated profile. Run the existing controlled benchmarks before applying settings. The model-memory estimate assumes F16 KV cache and a single sequence.
+
+Unit tests: `python -m unittest discover -s tests -p test_hardware_advisor.py`.

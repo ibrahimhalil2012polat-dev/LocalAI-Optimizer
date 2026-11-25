@@ -8,6 +8,7 @@ import subprocess
 from pathlib import Path
 
 import apply_optimization
+from hardware_advisor import analyze_models
 
 GB = 1024 ** 3
 OLLAMA_URL = "http://127.0.0.1:11434"
@@ -74,7 +75,7 @@ def scan_models():
 
 def analyze():
     scan_hardware()
-    scan_models()
+    analyze_models(scan_models())
 
 
 def run_script(script):
